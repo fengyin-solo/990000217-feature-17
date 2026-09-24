@@ -117,7 +117,43 @@ The frontend will be available at `http://localhost:5173`
 | POST | `/api/articles` | Create new article | Yes |
 | PUT | `/api/articles/:id` | Update article | Yes |
 | DELETE | `/api/articles/:id` | Delete article | Yes |
+| POST | `/api/articles/:id/restore` | Undo latest write / restore article | Yes |
 | GET | `/api/tags` | Get all unique tags | No |
+
+### Save feedback, concurrency and duplicate-submit safety
+
+Write responses (create/update/delete) keep their original payload fields and
+additionally return a `meta` object:
+
+- `meta.action` — `created` / `updated` / `unchanged` / `deleted` / `restored` / `conflict`
+- `meta.changed` — the fields changed by this write (`title` / `body` / `summary` / `tags`), each with the `before` and `after` value
+- `meta.current` — the resulting `version` and `updated_at` (null after delete)
+- `meta.recoverable` — how to undo the write: `method`, `path`, `revisionId` and `expiresAt` (24h TTL)
+
+**Concurrent editing (optimistic locking):** articles carry an integer
+`version`. Sending the loaded `version` with a PUT makes the server reject the
+write with `409 VERSION_CONFLICT` (plus the current article in `current`) when
+someone else committed a change first. Omitting `version` forces the update
+(old clients remain compatible).
+
+**Idempotent writes:** send an `Idempotency-Key` header on POST/PUT/DELETE.
+The first response is stored for 24h and any retry after a timeout, expired
+token or double submit is replayed verbatim (`Idempotent-Replay: true`
+header), so the write happens at most once. Reusing a key with a different
+request body returns `409 IDEMPOTENCY_KEY_MISMATCH`.
+
+**Recoverable state:** every write stores a pre-write snapshot in
+`article_revisions`. `POST /api/articles/:id/restore` (optionally with
+`{ "revisionId": <id> }`) applies the inverse — restoring a deleted article,
+rolling an update back, or removing a created article. Expired revisions
+return `410 RECOVERY_EXPIRED`.
+
+The admin UI persists pending writes and local drafts in localStorage:
+re-entering the editor replays an unconfirmed write with the same
+idempotency key to restore the correct state, a conflict offers
+"load latest" / "force overwrite", and a deleted article shows an undo
+notification.
+
 
 ## Admin Credentials
 

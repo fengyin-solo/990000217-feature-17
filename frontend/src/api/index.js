@@ -14,14 +14,18 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Handle 401 responses
+// Handle expired/invalid tokens on write (and other) responses
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      localStorage.removeItem('blog_token')
-      localStorage.removeItem('blog_username')
-      // Optionally redirect to login
+    const status = error.response?.status
+    if (status === 401 || status === 403) {
+      // Only clear credentials when the request actually carried a token;
+      // views decide whether to redirect to login and reconcile pending writes.
+      if (localStorage.getItem('blog_token')) {
+        localStorage.removeItem('blog_token')
+        localStorage.removeItem('blog_username')
+      }
     }
     return Promise.reject(error)
   }

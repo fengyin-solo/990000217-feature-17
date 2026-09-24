@@ -106,6 +106,12 @@ The frontend will be available at `http://localhost:5173`
 - **Pagination**: Navigate through articles with pagination (10 per page)
 - **Admin Panel**: Protected admin area for managing articles
 - **JWT Authentication**: Secure admin login with JSON Web Tokens
+- **Safe concurrent editing**: Optimistic locking via article `version`; a
+  stale update returns `409 VERSION_CONFLICT` with the current server state
+- **Idempotent writes**: Send an `Idempotency-Key` header on create /
+  update / delete to make retries and duplicate submissions replay the first
+  result instead of writing twice; every write response includes a `meta`
+  envelope (changed fields, recoverable previous snapshot, new version)
 
 ## API Endpoints
 
@@ -113,11 +119,32 @@ The frontend will be available at `http://localhost:5173`
 |--------|----------|-------------|---------------|
 | POST | `/api/auth/login` | Admin login | No |
 | GET | `/api/articles` | List articles (with pagination and tag filter) | No |
-| GET | `/api/articles/:id` | Get single article | No |
-| POST | `/api/articles` | Create new article | Yes |
-| PUT | `/api/articles/:id` | Update article | Yes |
-| DELETE | `/api/articles/:id` | Delete article | Yes |
+| GET | `/api/articles/:id` | Get single article (includes `version`) | No |
+| POST | `/api/articles` | Create new article (`Idempotency-Key` optional) | Yes |
+| PUT | `/api/articles/:id` | Update article (optional `version` for optimistic locking; `Idempotency-Key` optional) | Yes |
+| DELETE | `/api/articles/:id` | Delete article (`Idempotency-Key` optional; deleted snapshot in `meta.previous`) | Yes |
+| GET | `/api/idempotency/:key` | Look up the outcome of a previously submitted write | Yes |
 | GET | `/api/tags` | Get all unique tags | No |
+
+### Write feedback envelope
+
+Successful write responses keep the article fields at the top level and add:
+
+```json
+{
+  "id": 1,
+  "title": "...",
+  "version": 2,
+  "meta": {
+    "action": "created | updated | deleted",
+    "changed": ["title", "tags"],
+    "previous": { "id": 1, "title": "old", "version": 1, "...": "..." },
+    "version": 2,
+    "updatedAt": "2026-09-24T00:00:00.000Z",
+    "replayed": false
+  }
+}
+```
 
 ## Admin Credentials
 

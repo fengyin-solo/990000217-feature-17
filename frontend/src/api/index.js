@@ -14,11 +14,12 @@ api.interceptors.request.use((config) => {
   return config
 })
 
-// Handle 401 responses
+// Handle expired / invalid token responses
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
+    // 401: missing token; 403: invalid or expired token.
+    if ([401, 403].includes(error.response?.status)) {
       localStorage.removeItem('blog_token')
       localStorage.removeItem('blog_username')
       // Optionally redirect to login

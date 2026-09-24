@@ -8,6 +8,24 @@
     </div>
     
     <el-card>
+      <el-alert
+        v-for="pending in uncertainDeletes"
+        :key="pending.scope"
+        class="uncertain-alert"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <template #title>
+          文章 #{{ pending.scope.split(':')[1] }} 的删除结果未知，可能已删除
+        </template>
+        <template #default>
+          <el-button size="small" type="warning" plain @click="checkDelete(pending)">
+            检查删除结果
+          </el-button>
+        </template>
+      </el-alert>
+
       <el-table :data="articles" v-loading="loading" style="width: 100%">
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="title" label="标题" min-width="200" />
@@ -50,6 +68,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../../api'
+import { submitWrite, resolvePending, listPending, AmbiguousWriteError } from '../../utils/writeRecovery'
 import Pagination from '../../components/Pagination.vue'
 
 const router = useRouter()
@@ -63,10 +82,42 @@ const pagination = ref({
   limit: 10,
   totalPages: 0
 })
+// Deletes whose result was never confirmed (timeout / expired token).
+const uncertainDeletes = ref([])
 
-onMounted(() => {
+onMounted(async () => {
+  await reconcilePendingDeletes()
   fetchArticles()
 })
+
+// Re-entering the list after a failed delete: confirm what actually happened
+// so the list reflects the true server state without a duplicate delete.
+async function reconcilePendingDeletes() {
+  const pendingDeletes = listPending().filter(p => p.scope.startsWith('delete:'))
+
+  for (const pending of pendingDeletes) {
+    const result = await resolvePending(pending.scope)
+    if (result.status === 'completed') {
+      ElMessage.success('上次删除已成功')
+    } else if (result.status === 'uncertain') {
+      uncertainDeletes.value.push(pending)
+    }
+  }
+}
+
+async function checkDelete(pending) {
+  const result = await resolvePending(pending.scope)
+  if (result.status === 'completed') {
+    uncertainDeletes.value = uncertainDeletes.value.filter(p => p.scope !== pending.scope)
+    ElMessage.success('删除已成功')
+    fetchArticles()
+  } else if (result.status === 'not_found') {
+    uncertainDeletes.value = uncertainDeletes.value.filter(p => p.scope !== pending.scope)
+    ElMessage.info('该删除未生效，可重新操作')
+  } else {
+    ElMessage.warning('仍无法确认，请重新登录或检查网络后重试')
+  }
+}
 
 async function fetchArticles() {
   loading.value = true
@@ -108,15 +159,27 @@ async function deleteArticle(article) {
         type: 'warning'
       }
     )
-    
-    await api.delete(`/articles/${article.id}`)
+
+    await submitWrite({
+      scope: `delete:${article.id}`,
+      method: 'delete',
+      url: `/articles/${article.id}`
+    })
     ElMessage.success('文章已删除')
     fetchArticles()
   } catch (error) {
-    if (error !== 'cancel') {
-      console.error('Failed to delete article:', error)
-      ElMessage.error('删除文章失败')
+    if (error === 'cancel') return
+
+    if (error instanceof AmbiguousWriteError) {
+      ElMessage.warning('删除结果未知，可能已经成功。请通过页面上方提示确认，切勿重复删除')
+      if (!uncertainDeletes.value.some(p => p.scope === `delete:${article.id}`)) {
+        uncertainDeletes.value.push(error.record)
+      }
+      return
     }
+
+    console.error('Failed to delete article:', error)
+    ElMessage.error(error.response?.data?.error || '删除文章失败')
   }
 }
 
@@ -146,5 +209,9 @@ function formatDate(dateStr) {
 
 .tag-cell {
   margin-right: 4px;
+}
+
+.uncertain-alert {
+  margin-bottom: 12px;
 }
 </style>
